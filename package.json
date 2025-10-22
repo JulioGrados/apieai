@@ -1,0 +1,59 @@
+{
+  "name": "api",
+  "version": "1.0.0",
+  "description": "Apis a usar en Escuala Americana de Innovación",
+  "main": "index.js",
+  "scripts": {
+    "dev": "DEBUG=api:* nodemon src/index.js",
+    "lint": "standard",
+    "test": "jest --detectOpenHandles"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://julio_giampiere_grados@bitbucket.org/devcodela/api.git"
+  },
+  "author": "Escuela Americana de Innovación",
+  "license": "MIT",
+  "homepage": "https://bitbucket.org/devcodela/api#readme",
+  "devDependencies": {
+    "cheerio": "^1.0.0-rc.3",
+    "nodemon": "^2.0.2",
+    "standard": "^14.3.1"
+  },
+  "dependencies": {
+    "@green-api/whatsapp-api-client": "^0.3.37",
+    "@sentry/node": "^6.3.6",
+    "@sentry/tracing": "^6.3.6",
+    "axios": "^1.4.0",
+    "body-parser": "^1.19.0",
+    "config": "git+ssh://git@github.com/JulioGrados/configeai.git",
+    "cors": "^2.8.5",
+    "cron": "^1.8.2",
+    "custom-error-instance": "^2.1.2",
+    "db": "git+ssh://git@github.com/JulioGrados/dbeai.git",
+    "express": "^4.18.2",
+    "express-fileupload": "^1.1.6",
+    "facebook-nodejs-business-sdk": "^15.0.0",
+    "jsonwebtoken": "^8.5.1",
+    "lodash": "^4.17.15",
+    "moment": "^2.29.3",
+    "moment-timezone": "^0.5.27",
+    "mongoose": "^5.9.25",
+    "moodle-client": "^0.5.2",
+    "morgan": "^1.9.1",
+    "randomatic": "^3.1.1",
+    "slug": "^2.1.1",
+    "socket.io": "^2.4.1",
+    "socket.io-client": "^3.1.2",
+    "uniqid": "^5.2.0",
+    "utils": "git+ssh://git@github.com/JulioGrados/utilseai.git"
+  },
+  "standard": {
+    "ignore": [
+      "/src/test"
+    ]
+  },
+  "bugs": {
+    "url": "https://bitbucket.org/devcodela/api/issues"
+  }
+}
