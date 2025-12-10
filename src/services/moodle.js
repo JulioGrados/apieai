@@ -1,6 +1,8 @@
 'use strict'
 const _ = require('lodash')
 const slug = require('slug')
+const fs = require('fs').promises
+const path = require('path')
 let randomize = require('randomatic')
 const { templateConstance } = require('utils/emails/constance')
 const { lastNameSpace } = require('utils/emails/constancePDF')
@@ -2031,30 +2033,321 @@ const certificateMoodle = async ({ courseId }) => {
   return certificates.validCertificates
 }
 
-const gradeNewCertificate = async ({ courseId }) => {
-  const usersMoodle = await enrolGetCourseMoodle(courseId) //utils
+// Funciones helper
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms))
+
+const withTimeout = (promise, timeoutMs = 60000) => {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`Request timeout after ${timeoutMs}ms`)), timeoutMs)
+    )
+  ])
+}
+
+const retryWithBackoff = async (fn, maxRetries = 3, baseDelay = 10000, timeoutMs = 60000) => {
+  let lastError
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await withTimeout(fn(), timeoutMs)
+    } catch (error) {
+      lastError = error
+      const isTimeout = error.message.includes('timeout') || 
+                       error.message.includes('ETIMEDOUT') || 
+                       error.code === 'ETIMEDOUT' || 
+                       error.code === 'ECONNABORTED' ||
+                       error.code === 'ECONNRESET'
+      const isRetryable = isTimeout || !error.response || [429, 503, 502, 504].includes(error.response?.status)
+      
+      if (i === maxRetries - 1 || !isRetryable) {
+        console.error(`❌ Final error after ${i + 1} attempts: ${error.message}`)
+        throw error
+      }
+      
+      const delayTime = baseDelay * Math.pow(2, i)
+      console.log(`⚠️  Retry ${i + 1}/${maxRetries} after ${delayTime}ms - Error: ${error.message}`)
+      await delay(delayTime)
+    }
+  }
+  throw lastError
+}
+
+// Función para obtener el directorio de checkpoints
+const getCheckpointDir = () => {
+  // Si estamos en el servidor, usar /var/www/apps/api/temp
+  // Si estamos en desarrollo, usar la ruta relativa
+  // const isProduction = process.env.NODE_ENV === 'production' || __dirname.includes('/var/www/')
+  
+  // if (isProduction) {
+    return '/var/www/apps/api/temp/checkpoints'
+  // } else {
+  //   return path.join(__dirname, '../../temp/checkpoints')
+  // }
+}
+
+// Función para guardar checkpoint
+const saveCheckpoint = async (courseId, processedUserIds, grades, failedUsers) => {
+  const checkpointDir = getCheckpointDir()
+  const checkpointPath = path.join(checkpointDir, `course_${courseId}.json`)
+  
+  const data = {
+    courseId,
+    processedUserIds, // Solo IDs para hacer el archivo más ligero
+    totalProcessed: grades.length,
+    totalFailed: failedUsers.length,
+    failedUsers,
+    grades,
+    timestamp: new Date().toISOString(),
+    lastUserId: processedUserIds[processedUserIds.length - 1] || null
+  }
+  
+  try {
+    // Crear directorio si no existe
+    await fs.mkdir(checkpointDir, { recursive: true })
+    
+    // Guardar archivo
+    await fs.writeFile(checkpointPath, JSON.stringify(data, null, 2), 'utf8')
+    
+    console.log(`💾 Checkpoint saved: ${checkpointPath}`)
+    console.log(`   📊 Processed: ${grades.length} | Failed: ${failedUsers.length}`)
+  } catch (error) {
+    console.error(`❌ Error saving checkpoint: ${error.message}`)
+    // No lanzar error, solo advertir
+  }
+}
+
+// Función para cargar checkpoint
+const loadCheckpoint = async (courseId) => {
+  const checkpointDir = getCheckpointDir()
+  const checkpointPath = path.join(checkpointDir, `course_${courseId}.json`)
+  
+  try {
+    const data = await fs.readFile(checkpointPath, 'utf8')
+    const checkpoint = JSON.parse(data)
+    
+    console.log(`📂 Checkpoint found: ${checkpointPath}`)
+    console.log(`   📅 Saved at: ${checkpoint.timestamp}`)
+    console.log(`   ✅ Already processed: ${checkpoint.totalProcessed} users`)
+    console.log(`   ❌ Previously failed: ${checkpoint.totalFailed} users`)
+    
+    return checkpoint
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      console.log('📝 No previous checkpoint found, starting fresh')
+    } else {
+      console.error(`⚠️  Error loading checkpoint: ${error.message}`)
+    }
+    return null
+  }
+}
+
+// Función para eliminar checkpoint
+const deleteCheckpoint = async (courseId) => {
+  const checkpointDir = getCheckpointDir()
+  const checkpointPath = path.join(checkpointDir, `course_${courseId}.json`)
+  
+  try {
+    await fs.unlink(checkpointPath)
+    console.log(`🗑️  Checkpoint deleted: ${checkpointPath}`)
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      console.error(`⚠️  Error deleting checkpoint: ${error.message}`)
+    }
+  }
+}
+
+const gradeNewCertificate = async ({ courseId, resumeFromCheckpoint = true }) => {
+  console.log(`\n${'='.repeat(60)}`)
+  console.log(`🚀 Starting gradeNewCertificate for course: ${courseId}`)
+  console.log(`${'='.repeat(60)}\n`)
+  
+  const usersMoodle = await enrolGetCourseMoodle(courseId)
+  console.log(`📋 Found ${usersMoodle.length} users in Moodle`)
     
   let course
   try {
     course = await courseDB.detail({ query: { moodleId: courseId } })
+    console.log(`📚 Course: ${course.name || 'N/A'}`)
   } catch (error) {
     throw error
   }
 
-  const respUsers = await createUserCertificate(usersMoodle)
-
-  if (respUsers.errorUsers.length > 0) {
-    return respUsers.errorUsers
+  // ============ CARGAR CHECKPOINT SI EXISTE ============
+  let checkpoint = null
+  if (resumeFromCheckpoint) {
+    checkpoint = await loadCheckpoint(courseId)
   }
 
-  let grades = []
-  await usersMoodle.reduce(async (promise, user) => {
-    await promise
-    const contents = await gradeUserMoodle(user.id, courseId)//utils
-    console.log(contents.usergrades[0])
-    grades.push(contents.usergrades[0])
-  }, Promise.resolve())
+  let grades = checkpoint ? checkpoint.grades : []
+  let failedUsers = checkpoint ? checkpoint.failedUsers : []
+  let processedUserIds = checkpoint ? checkpoint.processedUserIds : []
 
+  // Filtrar usuarios que ya fueron procesados
+  let usersToProcess = usersMoodle
+  if (checkpoint && processedUserIds.length > 0) {
+    usersToProcess = usersMoodle.filter(user => !processedUserIds.includes(user.id))
+    console.log(`\n🔄 RESUMING FROM CHECKPOINT`)
+    console.log(`   ✅ Already processed: ${processedUserIds.length} users`)
+    console.log(`   📝 Remaining: ${usersToProcess.length} users`)
+    console.log(`   ❌ Previously failed: ${failedUsers.length} users\n`)
+  }
+
+  // Si no hay checkpoint, crear usuarios primero
+  if (!checkpoint) {
+    console.log('👥 Creating/updating users in database...')
+    const respUsers = await createUserCertificate(usersMoodle)
+    if (respUsers.errorUsers.length > 0) {
+      console.error(`❌ Errors creating users: ${respUsers.errorUsers.length}`)
+      return respUsers.errorUsers
+    }
+    console.log(`✅ Users created/updated successfully\n`)
+  }
+
+  // Si ya procesamos todos los usuarios, continuar al siguiente paso
+  if (usersToProcess.length === 0 && grades.length > 0) {
+    console.log(`✅ All users already processed! Continuing to next steps...\n`)
+  } else {
+    // ============ CONFIGURACIÓN CONSERVADORA ============
+    const DELAY_BETWEEN_REQUESTS = 15000 // 15 segundos entre usuarios
+    const MAX_RETRIES = 3
+    const REQUEST_TIMEOUT = 60000 // 60 segundos
+    const BASE_RETRY_DELAY = 10000 // 10 segundos base (10s, 20s, 40s)
+    const CHECKPOINT_INTERVAL = 5 // Guardar cada 5 usuarios
+    const MAX_CONSECUTIVE_ERRORS = 5 // Parar después de 5 errores seguidos
+    
+    let consecutiveErrors = 0
+    const totalUsers = usersMoodle.length
+    const alreadyProcessed = processedUserIds.length
+
+    console.log(`\n${'='.repeat(60)}`)
+    console.log(`📦 PROCESSING CONFIGURATION`)
+    console.log(`${'='.repeat(60)}`)
+    console.log(`   Total users: ${totalUsers}`)
+    console.log(`   Already processed: ${alreadyProcessed}`)
+    console.log(`   Remaining: ${usersToProcess.length}`)
+    console.log(`   Delay between requests: ${DELAY_BETWEEN_REQUESTS}ms (${DELAY_BETWEEN_REQUESTS/1000}s)`)
+    console.log(`   Request timeout: ${REQUEST_TIMEOUT}ms (${REQUEST_TIMEOUT/1000}s)`)
+    console.log(`   Max retries per user: ${MAX_RETRIES}`)
+    console.log(`   Checkpoint interval: every ${CHECKPOINT_INTERVAL} users`)
+    console.log(`   Estimated time: ~${Math.ceil(usersToProcess.length * (DELAY_BETWEEN_REQUESTS + 5000) / 60000)} minutes`)
+    console.log(`${'='.repeat(60)}\n`)
+
+    for (let i = 0; i < usersToProcess.length; i++) {
+      const user = usersToProcess[i]
+      const currentNumber = alreadyProcessed + i + 1
+      const percentage = ((currentNumber / totalUsers) * 100).toFixed(1)
+      
+      console.log(`\n${'─'.repeat(60)}`)
+      console.log(`🔄 User ${currentNumber}/${totalUsers} (${percentage}%)`)
+      console.log(`   ID: ${user.id}`)
+      console.log(`   Name: ${user.firstname} ${user.lastname}`)
+      console.log(`   Email: ${user.email || 'N/A'}`)
+      
+      try {
+        const startTime = Date.now()
+        
+        const contents = await retryWithBackoff(
+          () => gradeUserMoodle(user.id, courseId),
+          MAX_RETRIES,
+          BASE_RETRY_DELAY,
+          REQUEST_TIMEOUT
+        )
+        
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
+        
+        if (contents && contents.usergrades && contents.usergrades[0]) {
+          console.log(`   ✅ SUCCESS (${elapsed}s)`)
+          grades.push(contents.usergrades[0])
+          processedUserIds.push(user.id)
+          consecutiveErrors = 0
+        } else {
+          console.log(`   ⚠️  WARNING: No grades found (${elapsed}s)`)
+          failedUsers.push({ 
+            userId: user.id, 
+            userName: `${user.firstname} ${user.lastname}`,
+            reason: 'No grades found' 
+          })
+          processedUserIds.push(user.id) // Marcar como procesado aunque falle
+        }
+        
+        // Guardar checkpoint periódicamente
+        if (processedUserIds.length % CHECKPOINT_INTERVAL === 0) {
+          await saveCheckpoint(courseId, processedUserIds, grades, failedUsers)
+        }
+        
+        // Delay antes del siguiente usuario
+        if (i < usersToProcess.length - 1) {
+          console.log(`   ⏳ Waiting ${DELAY_BETWEEN_REQUESTS/1000}s before next user...`)
+          await delay(DELAY_BETWEEN_REQUESTS)
+        }
+        
+      } catch (error) {
+        consecutiveErrors++
+        const errorMsg = error.message || 'Unknown error'
+        
+        console.log(`   ❌ ERROR: ${errorMsg}`)
+        console.log(`   ⚠️  Consecutive errors: ${consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}`)
+        
+        failedUsers.push({ 
+          userId: user.id, 
+          userName: `${user.firstname} ${user.lastname}`,
+          reason: errorMsg
+        })
+        
+        // Guardar checkpoint después de cada error
+        await saveCheckpoint(courseId, processedUserIds, grades, failedUsers)
+        
+        // Si hay demasiados errores consecutivos, detener
+        if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+          console.log(`\n${'='.repeat(60)}`)
+          console.log(`🛑 PROCESS STOPPED`)
+          console.log(`${'='.repeat(60)}`)
+          console.log(`   Reason: ${consecutiveErrors} consecutive errors`)
+          console.log(`   Processed: ${grades.length}/${totalUsers} users`)
+          console.log(`   Failed: ${failedUsers.length} users`)
+          console.log(`   Checkpoint saved: ${getCheckpointDir()}/course_${courseId}.json`)
+          console.log(`\n⏰ NEXT STEPS:`)
+          console.log(`   1. Wait 15-30 minutes for IP unblock`)
+          console.log(`   2. Call: gradeNewCertificate({ courseId: ${courseId}, resumeFromCheckpoint: true })`)
+          console.log(`${'='.repeat(60)}\n`)
+          
+          throw new Error(`Process stopped after ${consecutiveErrors} consecutive errors. Progress saved.`)
+        }
+        
+        // Pausa extra después de error
+        console.log(`   ⏳ Pausing 30s after error...`)
+        await delay(30000)
+      }
+    }
+
+    // Guardar checkpoint final
+    await saveCheckpoint(courseId, processedUserIds, grades, failedUsers)
+  }
+
+  // ============ RESUMEN FINAL DE PROCESAMIENTO ============
+  console.log(`\n${'='.repeat(60)}`)
+  console.log(`📊 PROCESSING SUMMARY`)
+  console.log(`${'='.repeat(60)}`)
+  console.log(`   ✅ Successfully processed: ${grades.length}/${usersMoodle.length}`)
+  console.log(`   ❌ Failed: ${failedUsers.length}`)
+  
+  if (failedUsers.length > 0) {
+    console.log(`\n   Failed users details:`)
+    failedUsers.slice(0, 10).forEach(f => {
+      console.log(`   - User ${f.userId} (${f.userName || 'N/A'}): ${f.reason}`)
+    })
+    if (failedUsers.length > 10) {
+      console.log(`   ... and ${failedUsers.length - 10} more`)
+    }
+  }
+  console.log(`${'='.repeat(60)}\n`)
+
+  if (grades.length === 0) {
+    throw new Error('No grades were retrieved. Moodle server may be blocking requests.')
+  }
+
+  // ============ CONTINUAR CON EL RESTO DEL PROCESO ============
+  console.log('🔍 Filtering grade items...')
   grades.forEach(grade => {
     let gradeFilter = grade.gradeitems.filter(
       item =>
@@ -2064,16 +2357,17 @@ const gradeNewCertificate = async ({ courseId }) => {
     grade.gradeitems = gradeFilter
   })
 
+  console.log('📚 Getting evaluations...')
   let evaluations
   if (course.typeOfEvaluation === 'exams') {
-    evaluations = await quizGetCourseMoodle(courseId) //utils
+    evaluations = await quizGetCourseMoodle(courseId)
     evaluations = evaluations.quizzes
   } else if (course.typeOfEvaluation === 'tasks') {
-    evaluations = await assignGetCourseMoodle(courseId) //utils
+    evaluations = await assignGetCourseMoodle(courseId)
     evaluations = evaluations.courses[0].assignments
   } else if (course.typeOfEvaluation === 'both') {
-    const examsBoth = await quizGetCourseMoodle(courseId) //utils
-    const tasksBoth = await assignGetCourseMoodle(courseId) //utils
+    const examsBoth = await quizGetCourseMoodle(courseId)
+    const tasksBoth = await assignGetCourseMoodle(courseId)
 
     const examsEnd = examsBoth.quizzes
     const tasksEnd = tasksBoth.courses[0].assignments
@@ -2106,6 +2400,7 @@ const gradeNewCertificate = async ({ courseId }) => {
     console.log('createExams', createExams)
     console.log('createTasks', createTasks)
   }
+  
   console.log('1')
   const evaluationsFilter =
     evaluations &&
@@ -2114,6 +2409,7 @@ const gradeNewCertificate = async ({ courseId }) => {
         (evaluation.name && evaluation.name.indexOf('Evaluación') > -1) ||
         (evaluation.name && evaluation.name.indexOf('Evaluacion') > -1)
     )
+  
   console.log('2')
   let createEvaluations
   if (course.typeOfEvaluation === 'exams') {
@@ -2122,6 +2418,7 @@ const gradeNewCertificate = async ({ courseId }) => {
   if (course.typeOfEvaluation === 'tasks') {
     createEvaluations = await createTaskCourse(evaluationsFilter, course)
   }
+  
   console.log('3')
   if (
     createEvaluations &&
@@ -2130,27 +2427,29 @@ const gradeNewCertificate = async ({ courseId }) => {
   ) {
     return createEvaluations.errorEvaluations
   }
+  
+  console.log('📝 Creating enrols...')
   const respEnrols = await createEnrolCourse(grades, course)
   if (respEnrols.errorEnrols.length > 0) {
     return respEnrols.errorEnrols
   }
 
-  // const respShipping = await createShippingUser(course)
-  // if (
-  //   respShipping &&
-  //   respShipping.errorShipping &&
-  //   respShipping.errorShipping.length > 0
-  // ) {
-  //   return respShipping.errorShipping
-  // }
-
+  console.log('🎓 Creating certificates...')
   const certificates = await createCertificatesCourse(course)
   if (certificates.errorCertificates.length > 0) {
     return certificates.errorCertificates
   }
 
+  // Eliminar checkpoint solo si todo fue exitoso
+  await deleteCheckpoint(courseId)
+
+  console.log(`\n${'='.repeat(60)}`)
+  console.log('✅ gradeNewCertificate COMPLETED SUCCESSFULLY!')
+  console.log(`${'='.repeat(60)}\n`)
+  
   return certificates.validCertificates
 }
+
 
 const chaptersModuleCourse = async modules => {
   const chapters = await chapterDB.list({})
