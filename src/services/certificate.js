@@ -20,7 +20,8 @@ const {
   deleteFile,
   updateSlides,
   getSlides,
-  exportPNGSlide
+  exportPNGSlide,
+  diagnosticar
 } = require('utils/functions/drive')
 const { getImagetoBase64Axios } = require('utils/functions/imagegettobase64')
 
@@ -107,11 +108,13 @@ const updateAdminCertificate = async (certficateId, body, files, loggedUser) => 
     for (const label in files) {
       // const certi = await certificateDB.detail({ query: { _id: certficateId }, populate: ['linked.ref', 'course.ref'] })
       const route = await saveFileCreateName(files[label], '/certificates')
+      console.log(route)
       body[label] = route
     }
   }
-  const certficate = await certificateDB.update(certficateId, body)
-  const certificateDetail = await certificateDB.detail({ query: { _id: certficate._id }, populate: ['linked.ref', 'course.ref'] })
+  const certificate = await certificateDB.update(certficateId, body)
+  console.log(certificate)
+  const certificateDetail = await certificateDB.detail({ query: { _id: certificate._id }, populate: ['linked.ref', 'course.ref'] })
   return certificateDetail
 }
 
@@ -151,7 +154,7 @@ const detailCertificateOpen = async params => {
       'course.ref': course._id.toString()
     }
   })
-  const googleId = '1JHo73Z83XXgq8bhShItJu3dr_TRwt4UZOcMGlA7grdo'
+  const googleId = '1Wt45ATBPiB3no-8GngnjnnyQFTJ3zImti-gYI8S7RAM'
   let evaluations = course.numberEvaluation
   if (course.numberEvaluation <= 10) { evaluations = 70 } else { evaluations = evaluations * 7 }
   const end = certificate.date
@@ -168,7 +171,9 @@ const detailCertificateOpen = async params => {
 
   if (!certificate.file1) {
     const doc = await getSlides(googleId)
-    const copyDoc = await copyDocs(googleId, doc)
+    const copyDoc = await copyDocs(googleId, { 
+ 	 name: `${doc.title}` 
+    })
     const update = await updateSlides(copyDoc.id, user, course, moment(start).format('LL'),  moment(end).format('LL'))
     const png = await exportPNGSlide(copyDoc.id)
     const png64 = await getImagetoBase64Axios(png)

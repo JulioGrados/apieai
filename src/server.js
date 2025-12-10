@@ -59,16 +59,45 @@ server.use(
   })
 )
 
-const corsOpts = {
-  origin: '*',
+server.use(morgan('dev'))
 
-  methods: ['GET', 'POST'],
+const allowedOrigins = [
+  'https://eai.edu.pe',
+  'https://www.eai.edu.pe',
+  'https://dash.eai.edu.pe',
+  'https://crm.eai.edu.pe',
+  'http://localhost:3000',
+  'http://localhost:3001',
+  'http://localhost:4000'
+]
 
-  allowedHeaders: ['Content-Type']
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Permitir requests sin origin (como mobile apps, Postman, curl)
+    if (!origin) return callback(null, true)
+    
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true)
+    } else {
+      console.log('❌ CORS blocked origin:', origin)
+      callback(new Error('Not allowed by CORS'))
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Requested-With',
+    'Accept',
+    'x-access-token',  // ✅ Header personalizado de autenticación
+    'Origin'
+  ],
+  exposedHeaders: ['Content-Length', 'X-Request-Id'],
+  maxAge: 86400 // 24 horas
 }
 
-server.use(morgan('dev'))
-server.use(cors())
+server.use(cors(corsOptions))
 
 routesOpen(server)
 server.use(authHandler)

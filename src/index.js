@@ -23,6 +23,15 @@ const main = async () => {
   moment.tz.setDefault('America/Bogota')
 
   const serverApp = await server.listen(config.server.port)
+
+ // ✅ Timeouts largos
+  serverApp.timeout = 900000           // 15 minutos
+  serverApp.keepAliveTimeout = 920000  // ✅ MÁS largo que timeout
+  serverApp.headersTimeout = 930000    // ✅ Aún más largo
+  
+  console.log(`✅ Server timeout: ${serverApp.timeout / 1000}s`)
+  console.log(`✅ Keep-alive timeout: ${serverApp.keepAliveTimeout / 1000}s`)
+
   connectIO(serverApp)
   handleMessage(`[Api Server] running in port ${config.server.port}`, filePath)
 }
@@ -30,3 +39,4 @@ process.on('uncaughtException', error => console.log(error))
 process.on('unhandledRejection', error => console.log(error))
 
 main()
+
