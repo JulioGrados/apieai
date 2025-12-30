@@ -268,20 +268,19 @@ const createUserCertificate = async usersMoodle => {
 }
 
 const createUserCourse = async (usersMoodle, course) => {
-  const users = await userDB.list({})
+  //const users = await userDB.list({})
   const enrols = await enrolDB.list({
     query: { 'course.moodleId': course.moodleId }
   })
 
   const userNew = usersMoodle.map(async element => {
-    // console.log(element)
-    const user = users.find(
-      item =>
-        parseInt(item.moodleId) === parseInt(element.id) ||
-        item.email === element.email ||
-        item.username === element.username
-    )
-
+    console.log(element)
+    let user = null
+    try {
+      user = await userDB.detail({ query: { $or: [{ moodleId: element.id }, { email: element.email }, { username: element.username }] } })
+    } catch (error) {
+      console.log(error)
+    }
     const data = {
       moodleId: element.id,
       username: element.username,
@@ -299,7 +298,7 @@ const createUserCourse = async (usersMoodle, course) => {
     const enrol = enrols.find(
       item => parseInt(item.linked.moodleId) === parseInt(element.id) && parseInt(item.course.moodleId) === parseInt(course.moodleId)
     )
-    console.log('enrol', enrol)
+    //console.log('enrol', enrol)
 
     if (user) {
       try {
@@ -325,14 +324,14 @@ const createUserCourse = async (usersMoodle, course) => {
 
           try {
             const enrol = await enrolDB.create(data)
-            console.log('Se creó un nuevo enrol', enrol)
+            //console.log('Se creó un nuevo enrol', enrol)
           } catch (error) {
-            console.log('error al crear un nuevo enrol', error)
+            //console.log('error al crear un nuevo enrol', error)
           }
         } 
         return updateUser
       } catch (error) {
-        console.log('error al editar usuario')
+        //console.log('error al editar usuario')
         throw {
           type: 'Actualizar usuario',
           message: `No actualizó el usuario ${user.names}`,
@@ -342,12 +341,24 @@ const createUserCourse = async (usersMoodle, course) => {
       }
     } else {
       try {
-        const user = await userDB.create(data)
-        console.log('Se creo usuario:', user)
+        const userCreate = await userDB.create({
+      moodleId: element.id,
+      username: element.username,
+      firstName: element.firstname,
+      lastName: element.lastname,
+      names: element.firstname + ' ' + element.lastname,
+      email: element.email,
+      country: element.country === 'PE' ? 'Perú' : '',
+      city: element.city,
+      role: undefined,
+      roles: ['Estudiante']
+      // shippings: []
+    })
+        console.log('Se creo usuario:', userCreate)
         const data = {
           linked: {
-            ...user.toJSON(),
-            ref: user._id
+            ...userCreate.toJSON(),
+            ref: userCreate._id
           },
           course: {
             ...course.toJSON(),
@@ -361,9 +372,9 @@ const createUserCourse = async (usersMoodle, course) => {
         } catch (error) {
           console.log('error al crear un nuevo enrol', error)
         }
-        return user
+        return userCreate
       } catch (error) {
-        console.log('error al crear usuario')
+        console.log('error al crear usuario', error)
         throw {
           type: 'Crear usuario',
           message: `No creó el usuario ${data.names}`,

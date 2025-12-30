@@ -2,12 +2,14 @@
 const fs = require('fs')
 const moment = require('moment-timezone')
 const CustomError = require('custom-error-instance')
+let randomize = require('randomatic')
 const {
   userDB,
   courseDB,
   examDB,
   taskDB,
   dealDB,
+  certificateDB,
   enrolDB,
   lessonDB,
   certificateDB
@@ -639,7 +641,6 @@ const updateMoodle = async (enrolId, body, loggedUser) => {
   }
   
 }
-
 const createAddressEnrol = async arr => {
   const address = arr.map(async element => {
     let course
