@@ -1,0 +1,191 @@
+'use strict'
+
+const OpenAI = require('openai')
+const fs = require('fs')
+
+// ID del asistente
+const ASSISTANT_ID = 'asst_PzWFubM9cS2RHmhmG9dLA0Jl'
+
+// API Key
+const API_KEY = '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'
+
+let openaiClient = null
+
+const getOpenAIClient = () => {
+  if (!openaiClient) {
+    console.log('Inicializando cliente de OpenAI...')
+    // Deshabilitar la verificación de navegador ya que estamos 100% en el servidor
+    openaiClient = new OpenAI({
+      apiKey: API_KEY,
+      dangerouslyAllowBrowser: false // Esto está deshabilitado, pero el SDK está fallando en la detección
+    })
+  }
+  return openaiClient
+}
+
+const uploadFiles = async (filePaths) => {
+  try {
+    const openai = getOpenAIClient()
+    const uploadedFiles = []
+
+    for (const filePath of filePaths) {
+      console.log('Subiendo archivo:', filePath)
+      const file = await openai.files.create({
+        file: fs.createReadStream(filePath),
+        purpose: 'assistants'
+      })
+      console.log('Archivo subido:', file.id)
+      uploadedFiles.push(file.id)
+    }
+
+    return uploadedFiles
+  } catch (error) {
+    console.error('Error uploading files to OpenAI:', error)
+    throw error
+  }
+}
+
+const createThreadAndRun = async (prompt, fileIds = []) => {
+  try {
+    const openai = getOpenAIClient()
+
+    console.log('Creando thread...')
+    const thread = await openai.beta.threads.create({
+      messages: [
+        {
+          role: 'user',
+          content: prompt,
+          attachments: fileIds.map(fileId => ({
+            file_id: fileId,
+            tools: [{ type: 'file_search' }]
+          }))
+        }
+      ]
+    })
+
+    console.log('Thread creado:', thread.id)
+
+    console.log('Ejecutando asistente...')
+    const run = await openai.beta.threads.runs.create(thread.id, {
+      assistant_id: ASSISTANT_ID
+    })
+
+    console.log('Run iniciado:', run.id)
+
+    let runStatus = await openai.beta.threads.runs.retrieve(thread.id, run.id)
+    let attempts = 0
+    const maxAttempts = 300
+
+    while (runStatus.status !== 'completed') {
+      if (runStatus.status === 'failed' || runStatus.status === 'cancelled' || runStatus.status === 'expired') {
+        throw new Error('Run failed with status: ' + runStatus.status)
+      }
+
+      attempts++
+      if (attempts > maxAttempts) {
+        throw new Error('Timeout: El asistente tardó demasiado en responder')
+      }
+
+      console.log('Esperando respuesta... (' + runStatus.status + ') - intento ' + attempts + '/' + maxAttempts)
+      await new Promise(resolve => setTimeout(resolve, 1000))
+      runStatus = await openai.beta.threads.runs.retrieve(thread.id, run.id)
+    }
+
+    console.log('Run completado!')
+
+    const messages = await openai.beta.threads.messages.list(thread.id)
+    const assistantMessages = messages.data.filter(msg => msg.role === 'assistant')
+    const lastMessage = assistantMessages[0]
+
+    const textContent = lastMessage.content.find(content => content.type === 'text')
+    const responseText = textContent ? textContent.text.value : ''
+
+    console.log('Respuesta recibida:', responseText.length, 'caracteres')
+
+    return {
+      threadId: thread.id,
+      runId: run.id,
+      response: responseText,
+      rawMessage: lastMessage
+    }
+  } catch (error) {
+    console.error('Error creating thread and running assistant:', error)
+    throw error
+  }
+}
+
+const generateCourseContent = async (prompt, filePaths = []) => {
+  try {
+    console.log('Iniciando generación de contenido del curso...')
+    let fileIds = []
+
+    if (filePaths && filePaths.length > 0) {
+      console.log('Subiendo', filePaths.length, 'archivo(s)...')
+      fileIds = await uploadFiles(filePaths)
+    }
+
+    const result = await createThreadAndRun(prompt, fileIds)
+
+    console.log('Contenido generado exitosamente!')
+    return result
+  } catch (error) {
+    console.error('Error generating course content:', error)
+    throw error
+  }
+}
+
+const parseCourseStructure = (markdownContent) => {
+  console.log('Parseando estructura del curso...')
+  const modules = []
+
+  const moduleRegex = /##\s*Módulo\s*(\d+):\s*(.+?)(?=##\s*Módulo|\n###|\Z)/gis
+  const chapterRegex = /###\s*Capítulo\s*(\d+):\s*(.+?)(?=###|\n##|\Z)/gis
+
+  let moduleMatch
+  let moduleOrder = 1
+
+  while ((moduleMatch = moduleRegex.exec(markdownContent)) !== null) {
+    const moduleName = moduleMatch[2].trim()
+    const moduleContent = moduleMatch[0]
+
+    const chapters = []
+    let chapterMatch
+    let chapterOrder = 1
+
+    while ((chapterMatch = chapterRegex.exec(moduleContent)) !== null) {
+      const chapterName = chapterMatch[2].trim()
+      const chapterContentStart = chapterMatch.index + chapterMatch[0].length
+      const nextChapterMatch = chapterRegex.exec(moduleContent)
+      const chapterContentEnd = nextChapterMatch ? nextChapterMatch.index : moduleContent.length
+
+      chapterRegex.lastIndex = chapterMatch.index + 1
+
+      const chapterContent = moduleContent.substring(chapterContentStart, chapterContentEnd).trim()
+
+      chapters.push({
+        name: chapterName,
+        order: chapterOrder++,
+        description: chapterContent.substring(0, 500),
+        content: chapterContent
+      })
+    }
+
+    console.log('Módulo', moduleOrder, ':', moduleName, 'con', chapters.length, 'capítulos')
+
+    modules.push({
+      name: moduleName,
+      order: moduleOrder++,
+      chapters
+    })
+  }
+
+  console.log('Estructura parseada:', modules.length, 'módulos')
+  return { modules }
+}
+
+module.exports = {
+  uploadFiles,
+  createThreadAndRun,
+  generateCourseContent,
+  parseCourseStructure
+}

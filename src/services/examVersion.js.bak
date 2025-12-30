@@ -1,0 +1,42 @@
+'use strict'
+
+const { examVersionDB } = require('db/lib')
+
+const listExamVersions = async params => {
+  const exams = await examVersionDB.list(params)
+  return exams
+}
+
+const createExamVersion = async (body, loggedExamVersion) => {
+  const exam = await examVersionDB.create(body)
+  return exam
+}
+
+const updateExamVersion = async (examId, body, loggedExamVersion) => {
+  const exam = await examVersionDB.update(examId, body)
+  return exam
+}
+
+const detailExamVersion = async params => {
+  const exam = await examVersionDB.detail(params)
+  return exam
+}
+
+const deleteExamVersion = async (examId, loggedExamVersion) => {
+  const exam = await examVersionDB.remove(examId)
+  return exam
+}
+
+const countDocuments = async params => {
+  const count = await examVersionDB.count(params)
+  return count
+}
+
+module.exports = {
+  countDocuments,
+  listExamVersions,
+  createExamVersion,
+  updateExamVersion,
+  detailExamVersion,
+  deleteExamVersion
+}

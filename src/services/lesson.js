@@ -1,10 +1,30 @@
 'use strict'
 
 const { lessonDB } = require('db/lib')
+const { countDocuments: countChapters } = require('./chapter')
+const { countDocuments: countQuestions } = require('./question')
 
 const listLessons = async params => {
   const lessons = await lessonDB.list(params)
-  return lessons
+  const lessonWithCounts = await Promise.all(
+    lessons.map(async lesson => {
+      const lessonId = lesson._id
+      const chaptersCount = await countChapters({
+        query: { lesson: lessonId }
+      })
+
+      const questionCount = await countQuestions({
+        query: { lesson: lessonId }
+      })
+
+      return {
+        ...lesson.toJSON(),
+        chaptersCount,
+        questionCount
+      }
+    })
+  )
+  return lessonWithCounts
 }
 
 const createLesson = async (body, loggedUser) => {
@@ -13,8 +33,21 @@ const createLesson = async (body, loggedUser) => {
 }
 
 const updateLesson = async (lessonId, body, loggedUser) => {
+  console.log('lesson')
   const lesson = await lessonDB.update(lessonId, body)
-  return lesson
+  const chaptersCount = await countChapters({
+    query: { lesson: lessonId }
+  })
+
+  const questionCount = await countQuestions({
+    query: { lesson: lessonId }
+  })
+  
+  return {
+    ...lesson.toJSON(),
+    chaptersCount,
+    questionCount
+  }
 }
 
 const detailLesson = async params => {

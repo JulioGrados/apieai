@@ -3,7 +3,16 @@
 const { chapterDB } = require('db/lib')
 
 const listChapters = async params => {
-  const chapters = await chapterDB.list(params)
+  // Agregar populate de versions y favoriteVersion
+  const populateParams = {
+    ...params,
+    populate: [
+      ...(params.populate || []),
+      { path: 'versions' },
+      { path: 'favoriteVersion' }
+    ]
+  }
+  const chapters = await chapterDB.list(populateParams)
   return chapters
 }
 
@@ -13,12 +22,24 @@ const createChapter = async (body, loggedUser) => {
 }
 
 const updateChapter = async (chapterId, body, loggedUser) => {
+  console.log(chapterId)
+  console.log(body)
   const chapter = await chapterDB.update(chapterId, body)
+  console.log(chapter)
   return chapter
 }
 
 const detailChapter = async params => {
-  const chapter = await chapterDB.detail(params)
+  // Agregar populate de versions y favoriteVersion
+  const populateParams = {
+    ...params,
+    populate: [
+      ...(params.populate || []),
+      { path: 'versions' },
+      { path: 'favoriteVersion' }
+    ]
+  }
+  const chapter = await chapterDB.detail(populateParams)
   return chapter
 }
 

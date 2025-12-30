@@ -18,6 +18,7 @@ const createChapter = async (req, res, next) => {
 
 const updateChapter = async (req, res, next) => {
   const chapterId = req.params.id
+  console.log(req)
   try {
     const chapter = await service.updateChapter(chapterId, req.body, req.user)
     return res.status(200).json(chapter)

@@ -7,13 +7,41 @@ const listCourses = async (req, res) => {
   return res.status(200).json(courses)
 }
 
+const listCoursesAi = async (req, res) => {
+  const courses = await service.listCoursesAi(req.query)
+  return res.status(200).json(courses)
+}
+
 const createCourse = async (req, res, next) => {
+  console.log('req.body', req.body)
   const body = JSON.parse(req.body.data)
   const files = req.files
+  console.log('body', body)
   try {
     const course = await service.createCourse(body, files, req.user)
     return res.status(201).json(course)
   } catch (error) {
+    next(error)
+  }
+}
+
+const createCourseAi = async (req, res, next) => {
+  console.log('=== createCourseAi Controller ===')
+  console.log('req.body:', req.body)
+  console.log('req.files:', req.files)
+
+  // Parsear el campo 'data' que contiene el JSON
+  const body = req.body.data ? JSON.parse(req.body.data) : req.body
+  const files = req.files
+
+  console.log('Parsed body:', body)
+  console.log('Files:', files ? Object.keys(files) : 'ninguno')
+
+  try {
+    const course = await service.createCourseAi(body, files, req.user)
+    return res.status(201).json(course)
+  } catch (error) {
+    console.error('Error en createCourseAi controller:', error)
     next(error)
   }
 }
@@ -132,7 +160,9 @@ const countDocuments = async (req, res) => {
 module.exports = {
   countDocuments,
   listCourses,
+  listCoursesAi,
   createCourse,
+  createCourseAi,
   updateCourse,
   updateDealCreate,
   detailCourse,

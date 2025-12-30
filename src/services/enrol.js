@@ -9,7 +9,8 @@ const {
   taskDB,
   dealDB,
   enrolDB,
-  lessonDB
+  lessonDB,
+  certificateDB
 } = require('db/lib')
 
 const { createEmailOnly } = require('./email')
@@ -579,6 +580,57 @@ const updateMoodle = async (enrolId, body, loggedUser) => {
       }
     }
     const enrolUpdate = await enrolDB.update(enrolId, dataEnrol)
+    if(dataEnrol.isFinished) {
+      try {
+        const certificate = await certificateDB.detail({query: {'linked.ref': dataEnrol.linked.ref.toString(), 'course.ref': course._id.toString()}})
+        const certi = await enrolDB.update(enrolId, {
+          certificate: {
+            ...certificate.toJSON(),
+            ref: certificate._id
+          },
+          isFinished: true
+        })
+
+        if (enrol.linked) {
+          await certificateDB.update(certificate._id, {
+            linked: dataEnrol.linked,
+            score: dataEnrol.score
+          })
+        }
+        console.log('Se actualizó enrol con certificado que existe:', certi)
+      } catch (error) {
+        const code = randomize('a0', 8)
+        const data = {
+          code: code,
+          shortCode: code,
+          linked: {
+            firstName: dataEnrol && dataEnrol.linked && dataEnrol.linked.firstName,
+            lastName: dataEnrol && dataEnrol.linked && dataEnrol.linked.lastName,
+            ref: dataEnrol && dataEnrol.linked && dataEnrol.linked.ref
+          },
+          course: {
+            shortName: course && course.shortName,
+            academicHours: course && course.academicHours,
+            ref: course && course._id
+          },
+          moodleId: course && course.moodleId,
+          enrol: enrolId,
+          score: dataEnrol.score,
+          date: new Date()
+        }
+
+        const certi = await certificateDB.create(data)
+
+        await enrolDB.update(enrol._id, {
+          certificate: {
+            ...certi.toJSON(),
+            ref: certi._id
+          }
+        })
+        console.log('Se creó certificado y actualizó enrol:', certi)
+      }
+    }
+    
     console.log('enrol', enrolUpdate)
     return enrolUpdate
   } else {

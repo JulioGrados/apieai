@@ -13,6 +13,11 @@ router
   .post(Api.createCourse)
 
 router
+  .route('/courses/ai')
+  .get(Api.listCoursesAi)
+  .post(Api.createCourseAi)
+
+router
   .route('/courses/:id')
   .get(Api.detailCourseFirst)
   .put(Api.updateCourse)
