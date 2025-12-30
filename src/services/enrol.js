@@ -12,7 +12,6 @@ const {
   certificateDB,
   enrolDB,
   lessonDB,
-  certificateDB
 } = require('db/lib')
 
 const { createEmailOnly } = require('./email')
