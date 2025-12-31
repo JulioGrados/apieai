@@ -1,3 +1,6 @@
+// Cargar variables de entorno desde .env
+require('dotenv').config()
+
 if (typeof File === 'undefined') {
   global.File = class File extends Blob {
     constructor(fileBits, fileName, options = {}) {

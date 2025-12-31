@@ -8,8 +8,17 @@ const ASSISTANT_ID = 'asst_PzWFubM9cS2RHmhmG9dLA0Jl' // Asistente para crear cur
 const LESSON_ASSISTANT_ID = 'asst_8rudtNeZDKqvSOPt2qHVZxWh' // Asistente para crear contenido de lección
 const EVALUATION_ASSISTANT_ID = 'asst_XrNkndUfkHO6SjUONwn6jC7W' // Asistente para crear evaluaciones
 
-// API Key
-const API_KEY = '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'
+// API Key desde variables de entorno
+const API_KEY = process.env.OPENAI_API_KEY
+
+// Validar que la API key esté configurada
+if (!API_KEY || API_KEY.length < 20) {
+  console.error('╔═══════════════════════════════════════════════════════════╗')
+  console.error('║  ERROR: OPENAI_API_KEY no está configurada correctamente ║')
+  console.error('║  Por favor configura la variable de entorno en .env      ║')
+  console.error('╚═══════════════════════════════════════════════════════════╝')
+  throw new Error('OPENAI_API_KEY no configurada')
+}
 
 let openaiClient = null
 
