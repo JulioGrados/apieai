@@ -87,8 +87,21 @@ const createCourseAi = async (body, files, loggedCourse) => {
         const file = files[fileKey]
         console.log(`Procesando archivo ${fileKey}:`, file.name, file.mimetype)
 
-        // Generar nombre limpio para el archivo
-        const cleanName = file.name.toLowerCase().replace(/\s/g, '_')
+        // Asegurarse de que el archivo tenga extensión
+        let cleanName = file.name.toLowerCase().replace(/\s/g, '_')
+
+        // Si el archivo no tiene extensión, agregarla según el mimetype
+        if (!cleanName.includes('.')) {
+          if (file.mimetype === 'application/pdf') {
+            cleanName = cleanName + '.pdf'
+          } else if (file.mimetype === 'text/plain') {
+            cleanName = cleanName + '.txt'
+          } else {
+            console.error('Tipo de archivo no soportado:', file.mimetype)
+            throw new Error(`Tipo de archivo no soportado: ${file.mimetype}. Solo se aceptan PDF y TXT.`)
+          }
+        }
+
         const fileName = `${file.md5}-${cleanName}`
         const filePath = `${uploadsDir}/${fileName}`
 
