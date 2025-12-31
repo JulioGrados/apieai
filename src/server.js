@@ -66,7 +66,7 @@ const allowedOrigins = [
   'https://www.eai.edu.pe',
   'https://dash.eai.edu.pe',
   'https://crm.eai.edu.pe',
-  'https://ia.eai.edu.pe',
+  'https://ai.eai.edu.pe',
   'http://localhost:3000',
   'http://localhost:3001',
   'http://localhost:3002',
