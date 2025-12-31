@@ -38,14 +38,28 @@ const uploadFiles = async (filePaths) => {
   try {
     const openai = getOpenAIClient()
     const uploadedFiles = []
+    const path = require('path')
 
     for (const filePath of filePaths) {
       console.log('Subiendo archivo:', filePath)
+
+      // Obtener el nombre del archivo con extensión desde la ruta
+      const fileName = path.basename(filePath)
+      console.log('Nombre del archivo con extensión:', fileName)
+
+      // Leer el archivo como buffer
+      const fileBuffer = fs.readFileSync(filePath)
+
+      // Crear objeto File con nombre explícito (incluyendo extensión)
+      const fileBlob = new File([fileBuffer], fileName, {
+        type: 'application/pdf'
+      })
+
       const file = await openai.files.create({
-        file: fs.createReadStream(filePath),
+        file: fileBlob,
         purpose: 'assistants'
       })
-      console.log('Archivo subido:', file.id)
+      console.log('Archivo subido con extensión:', file.id, '- nombre:', fileName)
       uploadedFiles.push(file.id)
     }
 
