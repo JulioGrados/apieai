@@ -138,7 +138,7 @@ Genera un curso completo sobre el siguiente tema: ${values.title || values.subje
 
 El curso debe estar estructurado de la siguiente manera:
 - Divide el contenido en ${values.moduleCount || 10} módulos temáticos coherentes
-- Cada módulo debe tener entre 3 y 8 lecciones
+- Cada módulo debe tener ${values.lessonCount || 5} lecciones
 - Cada lección debe tener una descripción clara y educativa
 
 Asignatura: ${values.subject || 'No especificada'}
