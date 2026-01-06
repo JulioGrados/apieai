@@ -70,6 +70,10 @@ ${JSON.stringify(courseStructure, null, 0)}`
       console.log('Contenido generado exitosamente')
     }
 
+    // Contar palabras en el contenido
+    const wordCount = content ? content.trim().split(/\s+/).filter(word => word.length > 0).length : 0
+    console.log('Cantidad de palabras:', wordCount)
+
     // Obtener el número de versión actual
     const existingVersions = await chapterVersionDB.count({
       query: { chapter: body.chapter }
@@ -86,6 +90,7 @@ ${JSON.stringify(courseStructure, null, 0)}`
       content,
       prompt: generatedPrompt,
       versionNumber,
+      wordCount,
       isFavorite: isFirstVersion // La primera versión es favorita por defecto
     }
 
@@ -213,9 +218,15 @@ IMPORTANTE:
     console.log('Generando contenido editado con OpenAI...')
     const result = await editLessonContent(editPrompt)
     console.log('editPrompt', editPrompt)
+
+    // Contar palabras en el contenido editado
+    const wordCount = result.content ? result.content.trim().split(/\s+/).filter(word => word.length > 0).length : 0
+    console.log('Cantidad de palabras en contenido editado:', wordCount)
+
     // Actualizar la versión con el nuevo contenido y agregar al historial de ediciones
     const updatedVersion = await chapterVersionDB.update(versionId, {
       content: result.content,
+      wordCount,
       $push: {
         edits: {
           editPrompt: body.editPrompt,

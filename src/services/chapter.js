@@ -13,7 +13,17 @@ const listChapters = async params => {
     ]
   }
   const chapters = await chapterDB.list(populateParams)
-  return chapters
+
+  // Agregar wordCount de la versión favorita a cada chapter
+  const chaptersWithWordCount = chapters.map(chapter => {
+    const chapterObj = chapter.toObject ? chapter.toObject() : chapter
+    return {
+      ...chapterObj,
+      wordCount: chapterObj.favoriteVersion?.wordCount || 0
+    }
+  })
+
+  return chaptersWithWordCount
 }
 
 const createChapter = async (body, loggedUser) => {
