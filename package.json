@@ -51,6 +51,10 @@
     "uniqid": "^5.2.0",
     "utils": "git+ssh://git@github.com/JulioGrados/utilseai.git"
   },
+  "overrides": {
+    "htmlparser2": "^8.0.2",
+    "entities": "^4.5.0"
+  },
   "standard": {
     "ignore": [
       "/src/test"
