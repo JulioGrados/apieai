@@ -1,6 +1,7 @@
 'use strict'
 
 const routesAgreement = require('./agreement')
+const routesBlog = require('./blog')
 const routesCall = require('./call')
 const routesCategory = require('./category')
 const routesCertificate = require('./certificate')
@@ -82,4 +83,5 @@ module.exports = server => {
   server.use('/api', routesExamVersion)
   server.use('/api', routesQuestion)
   server.use('/api', routesUpload)
+  server.use('/api', routesBlog)
 }
