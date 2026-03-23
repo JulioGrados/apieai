@@ -25,6 +25,7 @@ const routesTestimony = require('./testimony')
 const routesUser = require('./user')
 const routesWhatsapp = require('./whatsapp')
 const routesZadarma = require('./zadarma')
+const routesBlog = require('./blog')
 
 module.exports = server => {
   server.use('/api/open', routesAgrement)
@@ -53,4 +54,5 @@ module.exports = server => {
   server.use('/api/open', routesWhatsapp)
   server.use('/api/open', routesZadarma)
   server.use('/api/open', routesDeal)
+  server.use('/api/open', routesBlog)
 }
