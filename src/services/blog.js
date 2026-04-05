@@ -23,6 +23,7 @@ const updateBlog = async (blogId, body, file, loggedUser) => {
     body.image = route
   }
   const blog = await blogDB.update(blogId, body)
+  console.log('blog', blog)
   return blog
 }
 
