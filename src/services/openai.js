@@ -34,34 +34,53 @@ const getOpenAIClient = () => {
   return openaiClient
 }
 
+// Archivos que se suben en paralelo a OpenAI
+const UPLOAD_CONCURRENCY = 5
+
+const uploadFile = async (openai, filePath) => {
+  const path = require('path')
+
+  console.log('Subiendo archivo:', filePath)
+
+  // Obtener el nombre del archivo con extensión desde la ruta
+  const fileName = path.basename(filePath)
+  console.log('Nombre del archivo con extensión:', fileName)
+
+  // Leer el archivo como buffer
+  const fileBuffer = fs.readFileSync(filePath)
+
+  // Crear objeto File con nombre explícito (incluyendo extensión)
+  const fileBlob = new File([fileBuffer], fileName, {
+    type: 'application/pdf'
+  })
+
+  const file = await openai.files.create({
+    file: fileBlob,
+    purpose: 'assistants'
+  })
+  console.log('Archivo subido con extensión:', file.id, '- nombre:', fileName)
+
+  return file.id
+}
+
 const uploadFiles = async (filePaths) => {
   try {
     const openai = getOpenAIClient()
-    const uploadedFiles = []
-    const path = require('path')
 
-    for (const filePath of filePaths) {
-      console.log('Subiendo archivo:', filePath)
+    // Se sube en paralelo (con límite) para que muchos archivos no disparen
+    // el timeout del request; el orden del resultado se conserva por índice
+    const uploadedFiles = new Array(filePaths.length)
+    let cursor = 0
 
-      // Obtener el nombre del archivo con extensión desde la ruta
-      const fileName = path.basename(filePath)
-      console.log('Nombre del archivo con extensión:', fileName)
-
-      // Leer el archivo como buffer
-      const fileBuffer = fs.readFileSync(filePath)
-
-      // Crear objeto File con nombre explícito (incluyendo extensión)
-      const fileBlob = new File([fileBuffer], fileName, {
-        type: 'application/pdf'
-      })
-
-      const file = await openai.files.create({
-        file: fileBlob,
-        purpose: 'assistants'
-      })
-      console.log('Archivo subido con extensión:', file.id, '- nombre:', fileName)
-      uploadedFiles.push(file.id)
+    const worker = async () => {
+      while (cursor < filePaths.length) {
+        const index = cursor++
+        uploadedFiles[index] = await uploadFile(openai, filePaths[index])
+      }
     }
+
+    const workers = Math.min(UPLOAD_CONCURRENCY, filePaths.length)
+    await Promise.all(Array.from({ length: workers }, worker))
 
     return uploadedFiles
   } catch (error) {
@@ -70,30 +89,148 @@ const uploadFiles = async (filePaths) => {
   }
 }
 
+// OpenAI solo acepta 10 attachments por mensaje. Con más archivos se usa un vector store.
+const MAX_MESSAGE_ATTACHMENTS = 10
+// Máximo de archivos por lote al poblar el vector store (el límite de la API es 500)
+const VECTOR_STORE_BATCH_SIZE = 100
+// Espera máxima por lote: 150 intentos x 2s = 5 minutos
+const VECTOR_STORE_POLL_INTERVAL_MS = 2000
+const VECTOR_STORE_MAX_POLLS = 150
+
+const getVectorStoresApi = (openai) => {
+  const api = openai.vectorStores || (openai.beta && openai.beta.vectorStores)
+  if (!api) {
+    throw new Error('El SDK de OpenAI instalado no expone la API de vector stores')
+  }
+  return api
+}
+
+// Espera acotada a que un lote termine de indexarse.
+// No se usa fileBatches.createAndPoll porque su bucle interno no tiene timeout:
+// si el lote se queda en 'in_progress' la petición nunca termina.
+const pollFileBatch = async (vectorStores, vectorStoreId, batchId) => {
+  let batch = await vectorStores.fileBatches.retrieve(batchId, { vector_store_id: vectorStoreId })
+  let attempts = 0
+
+  while (batch.status === 'in_progress') {
+    attempts++
+    if (attempts > VECTOR_STORE_MAX_POLLS) {
+      throw new Error('Timeout: los archivos tardaron demasiado en indexarse en el vector store')
+    }
+
+    console.log('Indexando archivos... (' + attempts + '/' + VECTOR_STORE_MAX_POLLS + ')',
+      JSON.stringify(batch.file_counts))
+    await new Promise(resolve => setTimeout(resolve, VECTOR_STORE_POLL_INTERVAL_MS))
+
+    batch = await vectorStores.fileBatches.retrieve(batchId, { vector_store_id: vectorStoreId })
+  }
+
+  return batch
+}
+
+// Crea un vector store con todos los archivos y espera a que terminen de indexarse
+const createVectorStoreWithFiles = async (openai, fileIds, name) => {
+  const vectorStores = getVectorStoresApi(openai)
+
+  console.log('Creando vector store para', fileIds.length, 'archivo(s)...')
+  const vectorStore = await vectorStores.create({
+    name,
+    expires_after: { anchor: 'last_active_at', days: 7 }
+  })
+  console.log('Vector store creado:', vectorStore.id)
+
+  let indexed = 0
+  let failed = 0
+
+  for (let i = 0; i < fileIds.length; i += VECTOR_STORE_BATCH_SIZE) {
+    const chunk = fileIds.slice(i, i + VECTOR_STORE_BATCH_SIZE)
+    console.log('Enviando lote de', chunk.length, 'archivo(s) al vector store...')
+
+    const created = await vectorStores.fileBatches.create(vectorStore.id, { file_ids: chunk })
+    const batch = await pollFileBatch(vectorStores, vectorStore.id, created.id)
+
+    console.log('Lote procesado:', batch.status, JSON.stringify(batch.file_counts))
+
+    indexed += (batch.file_counts && batch.file_counts.completed) || 0
+    failed += (batch.file_counts && batch.file_counts.failed) || 0
+
+    if (batch.status === 'cancelled') {
+      throw new Error('La indexación de archivos en el vector store fue cancelada')
+    }
+  }
+
+  if (failed > 0) {
+    console.warn('Archivos que no se pudieron indexar:', failed, 'de', fileIds.length)
+  }
+
+  // Si ninguno se indexó, el asistente respondería sin ver los documentos
+  if (indexed === 0) {
+    throw new Error('Ningún archivo se pudo indexar en el vector store (' + fileIds.length + ' enviados)')
+  }
+
+  console.log('Vector store listo:', vectorStore.id, '-', indexed, 'de', fileIds.length, 'archivo(s) indexados')
+  return vectorStore.id
+}
+
+// El vector store del thread requiere que el asistente tenga habilitado file_search.
+// Devuelve la lista de tools a forzar en el run, o null si el asistente ya lo tiene.
+const buildRunTools = async (openai, assistantId) => {
+  try {
+    const assistant = await openai.beta.assistants.retrieve(assistantId)
+    const tools = assistant.tools || []
+
+    if (tools.some(tool => tool.type === 'file_search')) {
+      return null
+    }
+
+    console.log('El asistente no tiene file_search habilitado, se agrega en el run')
+    return [...tools, { type: 'file_search' }]
+  } catch (error) {
+    console.warn('No se pudo verificar las tools del asistente:', error.message)
+    return [{ type: 'file_search' }]
+  }
+}
+
 const createThreadAndRun = async (prompt, fileIds = []) => {
   try {
     const openai = getOpenAIClient()
 
+    const message = { role: 'user', content: prompt }
+    const threadPayload = { messages: [message] }
+    let vectorStoreId = null
+
+    if (fileIds.length > 0 && fileIds.length <= MAX_MESSAGE_ATTACHMENTS) {
+      message.attachments = fileIds.map(fileId => ({
+        file_id: fileId,
+        tools: [{ type: 'file_search' }]
+      }))
+    } else if (fileIds.length > MAX_MESSAGE_ATTACHMENTS) {
+      console.log(
+        fileIds.length, 'archivos superan el límite de', MAX_MESSAGE_ATTACHMENTS,
+        'attachments por mensaje, se usará un vector store'
+      )
+      vectorStoreId = await createVectorStoreWithFiles(openai, fileIds, 'curso-' + Date.now())
+      threadPayload.tool_resources = {
+        file_search: { vector_store_ids: [vectorStoreId] }
+      }
+    }
+
     console.log('Creando thread...')
-    const thread = await openai.beta.threads.create({
-      messages: [
-        {
-          role: 'user',
-          content: prompt,
-          attachments: fileIds.map(fileId => ({
-            file_id: fileId,
-            tools: [{ type: 'file_search' }]
-          }))
-        }
-      ]
-    })
+    const thread = await openai.beta.threads.create(threadPayload)
 
     console.log('Thread creado:', thread.id)
 
     console.log('Ejecutando asistente...')
-    const run = await openai.beta.threads.runs.create(thread.id, {
-      assistant_id: ASSISTANT_ID
-    })
+    const runPayload = { assistant_id: ASSISTANT_ID }
+
+    if (vectorStoreId) {
+      const tools = await buildRunTools(openai, ASSISTANT_ID)
+      if (tools) {
+        runPayload.tools = tools
+      }
+    }
+
+    const run = await openai.beta.threads.runs.create(thread.id, runPayload)
 
     console.log('Run iniciado:', run.id)
     console.log('Thread ID disponible:', thread.id)
@@ -139,6 +276,7 @@ const createThreadAndRun = async (prompt, fileIds = []) => {
     return {
       threadId: thread.id,
       runId: run.id,
+      vectorStoreId,
       response: responseText,
       rawMessage: lastMessage
     }
