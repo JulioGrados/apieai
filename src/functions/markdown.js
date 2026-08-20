@@ -45,32 +45,70 @@ const stripAssistantArtifacts = text => {
 }
 
 /**
- * Si TODO el contenido viene envuelto en un bloque de código (```markdown ... ```)
+ * Si TODO el contenido viene envuelto en un bloque de código (```markdown … ```)
  * lo desenvuelve: si no, react-markdown lo pinta como un bloque de código gigante.
+ *
+ * Soporta lecciones que traen bloques de código adentro (```python, ```bash, …):
+ * en ese caso el número total de ``` sigue siendo par y, al quitar la envoltura,
+ * los bloques internos deben seguir emparejados. Si algo no cuadra, no se toca.
  */
 const unwrapOuterFence = text => {
-  const trimmed = toText(text).trim()
-  if (!trimmed.startsWith('```')) {
-    return toText(text)
+  const original = toText(text)
+  const trimmed = original.trim()
+
+  if (!trimmed.startsWith('```') || !trimmed.endsWith('```')) {
+    return original
   }
 
-  const fences = trimmed.match(/^```/gm)
-  if (!fences || fences.length !== 2 || !trimmed.endsWith('```')) {
-    return toText(text)
+  const totalFences = (trimmed.match(/^```/gm) || []).length
+  if (totalFences < 2 || totalFences % 2 !== 0) {
+    return original
   }
 
-  return trimmed
+  // Lenguaje declarado en la apertura: solo se desenvuelve si es markdown o
+  // no declara nada. Si dice ```python el bloque es código de verdad.
+  const primeraLinea = trimmed.split('\n')[0]
+  const lenguaje = primeraLinea.slice(3).trim().toLowerCase()
+  if (lenguaje !== '' && lenguaje !== 'markdown' && lenguaje !== 'md') {
+    return original
+  }
+
+  const cuerpo = trimmed
     .replace(/^```[a-zA-Z]*[ \t]*\n?/, '')
     .replace(/\n?```$/, '')
+
+  // Los bloques de código internos deben quedar emparejados
+  if (((cuerpo.match(/^```/gm) || []).length) % 2 !== 0) {
+    return original
+  }
+
+  return cuerpo
 }
 
 /** Normaliza saltos de línea, tabs y líneas en blanco de más. */
 const normalizeWhitespace = text => {
-  return toText(text)
+  const lineas = toText(text)
     .replace(/\r\n?/g, '\n')
     .replace(/\t/g, '  ')
     .split('\n')
-    .map(line => line.replace(/[ \t]+$/, ''))
+
+  const limpias = lineas.map((linea, i) => {
+    const siguiente = i < lineas.length - 1 ? lineas[i + 1] : ''
+    const contenido = linea.replace(/[ \t]+$/, '')
+
+    // Dos espacios al final son un salto de línea duro en Markdown. Solo tienen
+    // sentido dentro de un párrafo: en títulos, listas o antes de una línea
+    // en blanco no hacen nada, así que ahí se quitan.
+    const esSaltoDuro = /\S {2,}$/.test(linea) &&
+      contenido !== '' &&
+      !/^#{1,6}\s/.test(contenido.trim()) &&
+      !/^```/.test(contenido.trim()) &&
+      siguiente.trim() !== ''
+
+    return esSaltoDuro ? contenido + '  ' : contenido
+  })
+
+  return limpias
     .join('\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
@@ -183,6 +221,7 @@ const toMarkdown = text => {
   const lines = content.split('\n')
   const out = []
   let firstHeadingDone = false
+  let dentroDeCodigo = false
 
   const lastLine = () => (out.length ? out[out.length - 1] : null)
   const pushBlank = () => {
@@ -192,6 +231,20 @@ const toMarkdown = text => {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
     const value = line.trim()
+
+    // Dentro de un bloque ``` el texto se copia tal cual
+    if (/^```/.test(value)) {
+      if (!dentroDeCodigo) pushBlank()
+      out.push(line)
+      dentroDeCodigo = !dentroDeCodigo
+      if (!dentroDeCodigo) out.push('')
+      continue
+    }
+
+    if (dentroDeCodigo) {
+      out.push(line)
+      continue
+    }
 
     if (!value) {
       pushBlank()
@@ -239,7 +292,7 @@ const toMarkdown = text => {
 
   // Si el texto no tenía ninguna pista de título, al menos se marca el primer
   // renglón como título para que nunca quede un documento sin estructura.
-  if (!/^#{1,6}\s/m.test(result)) {
+  if (!/^#{1,6}\s/m.test(result) && !/^```/.test(result)) {
     const parts = result.split('\n')
     const first = parts.shift()
     result = ['# ' + cleanHeadingText(first), '', parts.join('\n').trim()].join('\n').trim()

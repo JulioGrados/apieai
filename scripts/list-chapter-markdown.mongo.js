@@ -19,6 +19,7 @@ const EXTRA_FILTER = {} // ej: { course: ObjectId('66f0...') } para revisar un c
 const LIMIT = 0 // 0 = todas
 const MOSTRAR = 'pendientes' // 'pendientes' = solo las que hay que arreglar | 'todas'
 const PREVIEW = 160 // caracteres de vista previa por lección
+const MOSTRAR_DIFERENCIAS = 0 // muestra el diff línea a línea de las primeras N pendientes
 const MOSTRAR_CONTENIDO = 0 // imprime el contenido completo de las primeras N pendientes
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -52,21 +53,97 @@ const corte = (texto, largo) => {
   return plano.length > largo ? plano.slice(0, largo) + '…' : plano
 }
 
+// Hace visibles los espacios al final y las líneas vacías
+const visible = linea => {
+  if (linea === '') return '(línea vacía)'
+  const marcada = linea.replace(/[ \t]+$/, coincidencia => '␣'.repeat(coincidencia.length))
+  return corte(marcada, 120)
+}
+
 const numero = valor => String(valor === undefined || valor === null ? '?' : valor)
 
-// Explica en palabras por qué una lección necesita arreglo
-const motivos = original => {
+// Explica exactamente qué va a cambiar comparando el contenido actual con el corregido
+const motivos = (original, nuevo) => {
   const razones = []
-  const stats = md.analyzeMarkdown(original)
+  const abriaConFence = original.trim().indexOf('```') === 0
+  const sigueConFence = nuevo.trim().indexOf('```') === 0
 
-  if (original.trim().indexOf('```') === 0) razones.push('todo el texto envuelto en ```')
-  if (/【[^】]*†[^】]*】/.test(original) || /\[\d+:\d+†[^\]]*\]/.test(original)) razones.push('citas del asistente (【…†source】)')
-  if (stats.headings === 0) razones.push('sin títulos (#, ##)')
-  if (/^\s*[•‣▪▫●◦·]\s+/m.test(original)) razones.push('viñetas sin formato (•)')
-  if (stats.headings === 0 && stats.bold >= 2) razones.push('usa **negritas** como títulos')
-  if (!razones.length) razones.push('espacios o saltos de línea de más')
+  if (abriaConFence && !sigueConFence) razones.push('quita el bloque ``` que envuelve toda la lección')
+  if (abriaConFence && sigueConFence) razones.push('⚠ empieza con ``` y NO se pudo desenvolver: revisar a mano')
+  if (/【[^】]*†[^】]*】/.test(original) || /\[\d+:\d+†[^\]]*\]/.test(original)) razones.push('quita citas del asistente (【…†source】)')
 
+  const antes = md.analyzeMarkdown(original)
+  const despues = md.analyzeMarkdown(nuevo)
+  if (despues.headings > antes.headings) razones.push('agrega títulos Markdown (' + antes.headings + ' → ' + despues.headings + ')')
+  if (despues.bullets > antes.bullets) razones.push('normaliza viñetas (' + antes.bullets + ' → ' + despues.bullets + ')')
+
+  if (/\n{3,}/.test(original)) razones.push('reduce líneas en blanco de más')
+
+  const sobranEspacios = original.split('\n').some(linea => {
+    const limpia = /\S {2,}$/.test(linea) ? linea.replace(/[ \t]+$/, '  ') : linea.replace(/[ \t]+$/, '')
+    return limpia !== linea
+  })
+  if (sobranEspacios) razones.push('quita espacios sobrantes al final de línea')
+
+  if (original !== original.trim()) razones.push('recorta espacios al inicio o al final del texto')
+  if (/[\u200b-\u200d\ufeff]/.test(original)) razones.push('quita caracteres invisibles')
+
+  if (!razones.length) razones.push('ajustes menores de formato')
   return razones
+}
+
+// Diff simple línea a línea, para revisar antes de aplicar
+const diffLineas = (textoA, textoB, maxCambios) => {
+  const a = textoA.split('\n')
+  const b = textoB.split('\n')
+  const cambios = []
+  const VENTANA = 25
+  let i = 0
+  let j = 0
+
+  while ((i < a.length || j < b.length) && cambios.length < maxCambios) {
+    if (i < a.length && j < b.length && a[i] === b[j]) {
+      i++
+      j++
+      continue
+    }
+
+    // Una de las dos versiones ya se acabó
+    if (i >= a.length) {
+      cambios.push({ linea: i + 1, antes: null, despues: b[j] })
+      j++
+      continue
+    }
+    if (j >= b.length) {
+      cambios.push({ linea: i + 1, antes: a[i], despues: null })
+      i++
+      continue
+    }
+
+    let salto = null
+    for (let k = 1; k <= VENTANA && !salto; k++) {
+      if (i < a.length && j + k < b.length && a[i] === b[j + k]) salto = { tipo: 'agregada', n: k }
+      else if (j < b.length && i + k < a.length && a[i + k] === b[j]) salto = { tipo: 'eliminada', n: k }
+    }
+
+    if (!salto) {
+      cambios.push({ linea: i + 1, antes: a[i], despues: b[j] })
+      i++
+      j++
+    } else if (salto.tipo === 'agregada') {
+      for (let k = 0; k < salto.n && cambios.length < maxCambios; k++) {
+        cambios.push({ linea: i + 1, antes: null, despues: b[j + k] })
+      }
+      j += salto.n
+    } else {
+      for (let k = 0; k < salto.n && cambios.length < maxCambios; k++) {
+        cambios.push({ linea: i + 1 + k, antes: a[i + k], despues: null })
+      }
+      i += salto.n
+    }
+  }
+
+  return cambios
 }
 
 const revisar = () => {
@@ -131,7 +208,7 @@ const revisar = () => {
     else if (estado === 'SOLO LIMPIEZA') porCurso[curso].limpieza++
     else porCurso[curso].ok++
 
-    const fila = { doc, estado, original }
+    const fila = { doc, estado, original, nuevo }
     todas.push(fila)
     if (estado !== 'ok') pendientes.push(fila)
   })
@@ -154,9 +231,30 @@ const revisar = () => {
     print('   Lección : ' + numero(doc.leccionOrden) + ' · ' + (doc.leccion || '(sin lección)') +
       '   [versión ' + numero(doc.versionNumber) + (doc.isFavorite ? ' ★ favorita' : '') +
       ' · ' + numero(doc.wordCount) + ' palabras]')
-    if (item.estado !== 'ok') print('   Motivos : ' + motivos(item.original).join(', '))
+    if (item.estado !== 'ok') print('   Cambios : ' + motivos(item.original, item.nuevo).join('; '))
     print('   Preview : ' + corte(item.original, PREVIEW))
   })
+
+  if (MOSTRAR_DIFERENCIAS > 0) {
+    listar.slice(0, MOSTRAR_DIFERENCIAS).forEach((item, i) => {
+      print('')
+      print('=== DIFERENCIAS ' + (i + 1) + ' (' + item.doc._id + ') ===')
+      const cambios = diffLineas(item.original, item.nuevo, 15)
+      if (!cambios.length) {
+        print('  (sin diferencias de línea)')
+        return
+      }
+      cambios.forEach(cambio => {
+        const etiqueta = '  línea ' + cambio.linea + ' '
+        if (cambio.antes === null) print(etiqueta + '+ ' + visible(cambio.despues))
+        else if (cambio.despues === null) print(etiqueta + '- ' + visible(cambio.antes))
+        else {
+          print(etiqueta + '- ' + visible(cambio.antes))
+          print(etiqueta + '+ ' + visible(cambio.despues))
+        }
+      })
+    })
+  }
 
   if (MOSTRAR_CONTENIDO > 0) {
     listar.slice(0, MOSTRAR_CONTENIDO).forEach((item, i) => {
