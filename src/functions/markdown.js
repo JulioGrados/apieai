@@ -44,45 +44,100 @@ const stripAssistantArtifacts = text => {
     .replace(/[​-‍﻿]/g, '')
 }
 
+// ¿La línea es una marca de código sin lenguaje declarado? (``` a secas)
+const esFenceSimple = linea => /^```\s*$/.test(linea.trim())
+const esFence = linea => /^```/.test(linea.trim())
+
+// ¿La línea parece código y no prosa?
+const pareceCodigo = linea => {
+  const valor = linea.trim()
+  if (!valor) return false
+  if (/^ {4,}\S/.test(linea)) return true
+  if (/[;{}=]|=>|\(\)|\w+\(/.test(valor)) return true
+  if (/^(import|from|def|class|print|return|const|let|var|function|SELECT|pip|npm)\b/i.test(valor)) return true
+  return false
+}
+
 /**
- * Si TODO el contenido viene envuelto en un bloque de código (```markdown … ```)
- * lo desenvuelve: si no, react-markdown lo pinta como un bloque de código gigante.
+ * Quita la envoltura ```markdown … ``` con la que el asistente devuelve la
+ * lección completa: si no, react-markdown la pinta como un bloque de código
+ * gigante. Respeta los bloques de código reales que haya dentro.
  *
- * Soporta lecciones que traen bloques de código adentro (```python, ```bash, …):
- * en ese caso el número total de ``` sigue siendo par y, al quitar la envoltura,
- * los bloques internos deben seguir emparejados. Si algo no cuadra, no se toca.
+ * El asistente deja la envoltura de varias formas, todas contempladas aquí:
+ *  - abre y cierra bien (caso normal, con o sin ```python adentro)
+ *  - abre y nunca cierra
+ *  - cierra antes del final y deja un comentario suelto después
+ *  - cierra y además deja una marca ``` huérfana al final
  */
 const unwrapOuterFence = text => {
   const original = toText(text)
-  const trimmed = original.trim()
+  const lineas = original.replace(/\r\n?/g, '\n').split('\n')
 
-  if (!trimmed.startsWith('```') || !trimmed.endsWith('```')) {
+  // 1. La primera línea con contenido debe abrir la envoltura
+  let inicio = 0
+  while (inicio < lineas.length && !lineas[inicio].trim()) inicio++
+  if (inicio >= lineas.length) return original
+
+  const apertura = lineas[inicio].trim()
+  if (!/^```(markdown|md)?$/i.test(apertura)) {
     return original
   }
 
-  const totalFences = (trimmed.match(/^```/gm) || []).length
-  if (totalFences < 2 || totalFences % 2 !== 0) {
+  // Las marcas se sustituyen por una línea vacía en vez de borrarse: así los
+  // párrafos de arriba y de abajo no quedan pegados (un párrafo seguido de ---
+  // se convertiría en título). El exceso de líneas en blanco se limpia después.
+  const cuerpo = lineas.slice()
+  cuerpo[inicio] = ''
+
+  const indicesFence = () => {
+    const indices = []
+    cuerpo.forEach((linea, i) => {
+      if (esFence(linea)) indices.push(i)
+    })
+    return indices
+  }
+
+  // 2. Si quedan marcas impares, la última marca simple es el cierre de la
+  //    envoltura (o una marca huérfana): se quita hasta que todo quede par.
+  let marcas = indicesFence()
+  let vueltas = 0
+  while (marcas.length % 2 !== 0 && vueltas < 5) {
+    let ultimaSimple = -1
+    for (let i = marcas.length - 1; i >= 0; i--) {
+      if (esFenceSimple(cuerpo[marcas[i]])) {
+        ultimaSimple = marcas[i]
+        break
+      }
+    }
+    if (ultimaSimple === -1) break
+    cuerpo[ultimaSimple] = ''
+    marcas = indicesFence()
+    vueltas++
+  }
+
+  // 3. Un par de marcas simples al final que solo encierra prosa (la típica
+  //    nota "Fin de la lección…") también es basura de la envoltura.
+  marcas = indicesFence()
+  if (marcas.length >= 2) {
+    const penultima = marcas[marcas.length - 2]
+    const ultima = marcas[marcas.length - 1]
+    const alFinal = cuerpo.length - penultima <= 8
+    const ambasSimples = esFenceSimple(cuerpo[penultima]) && esFenceSimple(cuerpo[ultima])
+    const dentro = cuerpo.slice(penultima + 1, ultima).filter(linea => linea.trim())
+    const soloProsa = dentro.length > 0 && dentro.every(linea => !pareceCodigo(linea))
+
+    if (alFinal && ambasSimples && soloProsa) {
+      cuerpo[penultima] = ''
+      cuerpo[ultima] = ''
+    }
+  }
+
+  // 4. Si algo quedó descuadrado, mejor no tocar nada
+  if (((cuerpo.filter(esFence).length) % 2) !== 0) {
     return original
   }
 
-  // Lenguaje declarado en la apertura: solo se desenvuelve si es markdown o
-  // no declara nada. Si dice ```python el bloque es código de verdad.
-  const primeraLinea = trimmed.split('\n')[0]
-  const lenguaje = primeraLinea.slice(3).trim().toLowerCase()
-  if (lenguaje !== '' && lenguaje !== 'markdown' && lenguaje !== 'md') {
-    return original
-  }
-
-  const cuerpo = trimmed
-    .replace(/^```[a-zA-Z]*[ \t]*\n?/, '')
-    .replace(/\n?```$/, '')
-
-  // Los bloques de código internos deben quedar emparejados
-  if (((cuerpo.match(/^```/gm) || []).length) % 2 !== 0) {
-    return original
-  }
-
-  return cuerpo
+  return cuerpo.join('\n')
 }
 
 /** Normaliza saltos de línea, tabs y líneas en blanco de más. */
