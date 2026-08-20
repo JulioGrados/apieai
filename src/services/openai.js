@@ -2,6 +2,7 @@
 
 const OpenAI = require('openai')
 const fs = require('fs')
+const { MARKDOWN_INSTRUCTIONS, normalizeLessonContent, isMarkdown } = require('../functions/markdown')
 
 // IDs de los asistentes
 const ASSISTANT_ID = 'asst_PzWFubM9cS2RHmhmG9dLA0Jl' // Asistente para crear cursos
@@ -373,10 +374,13 @@ const generateLessonContent = async (prompt) => {
     })
     console.log('Thread creado:', thread.id)
 
-    // Ejecutar el asistente de lecciones
+    // Ejecutar el asistente de lecciones.
+    // additional_instructions se suma a las instrucciones del asistente solo en
+    // este run: así el Markdown queda garantizado aunque el asistente cambie.
     console.log('Ejecutando asistente de lecciones...')
     const run = await openai.beta.threads.runs.create(thread.id, {
-      assistant_id: LESSON_ASSISTANT_ID
+      assistant_id: LESSON_ASSISTANT_ID,
+      additional_instructions: MARKDOWN_INSTRUCTIONS
     })
     console.log('Run creado:', run.id)
 
@@ -416,7 +420,14 @@ const generateLessonContent = async (prompt) => {
     }
 
     const lastMessage = assistantMessages[0]
-    const content = lastMessage.content[0].text.value
+    const rawContent = lastMessage.content[0].text.value
+
+    // Red de seguridad: si el asistente no devolvió Markdown, se convierte aquí
+    // para que en la base de datos nunca quede texto plano.
+    const content = normalizeLessonContent(rawContent)
+    if (!isMarkdown(rawContent)) {
+      console.warn('El asistente devolvió contenido sin formato Markdown, se normalizó localmente')
+    }
 
     console.log('Contenido generado:', content.substring(0, 200) + '...')
     console.log('Total caracteres:', content.length)
@@ -451,10 +462,13 @@ const editLessonContent = async (editPrompt) => {
     })
     console.log('Thread creado:', thread.id)
 
-    // Ejecutar el asistente de lecciones
+    // Ejecutar el asistente de lecciones.
+    // additional_instructions se suma a las instrucciones del asistente solo en
+    // este run: así el Markdown queda garantizado aunque el asistente cambie.
     console.log('Ejecutando asistente de lecciones...')
     const run = await openai.beta.threads.runs.create(thread.id, {
-      assistant_id: LESSON_ASSISTANT_ID
+      assistant_id: LESSON_ASSISTANT_ID,
+      additional_instructions: MARKDOWN_INSTRUCTIONS
     })
     console.log('Run creado:', run.id)
 
@@ -494,7 +508,12 @@ const editLessonContent = async (editPrompt) => {
     }
 
     const lastMessage = assistantMessages[0]
-    const content = lastMessage.content[0].text.value
+    const rawContent = lastMessage.content[0].text.value
+
+    const content = normalizeLessonContent(rawContent)
+    if (!isMarkdown(rawContent)) {
+      console.warn('La edición volvió sin formato Markdown, se normalizó localmente')
+    }
 
     console.log('Contenido editado:', content.substring(0, 200) + '...')
     console.log('Total caracteres:', content.length)

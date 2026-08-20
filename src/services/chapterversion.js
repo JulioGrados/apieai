@@ -2,6 +2,7 @@
 
 const { chapterVersionDB, chapterDB, courseDB, lessonDB } = require('db/lib')
 const { generateLessonContent, editLessonContent } = require('./openai')
+const { MARKDOWN_INSTRUCTIONS, normalizeLessonContent, countWords } = require('../functions/markdown')
 
 const listChapterVersions = async params => {
   const chapters = await chapterVersionDB.list(params)
@@ -60,7 +61,9 @@ const createChapterVersion = async (body, loggedUser) => {
       generatedPrompt = `Crea contenido para la lección número ${chapter.order} llamada "${chapter.name}", que pertenece al módulo ${lesson.order} llamado "${lesson.name}" del curso "${course.name}".
 
 Considera como la estructura completa del curso "${course.name}" la siguiente:
-${JSON.stringify(courseStructure, null, 0)}`
+${JSON.stringify(courseStructure, null, 0)}
+
+${MARKDOWN_INSTRUCTIONS}`
 
       console.log('Prompt generado:', generatedPrompt.substring(0, 300) + '...')
       console.log('Generando contenido con OpenAI...')
@@ -70,8 +73,11 @@ ${JSON.stringify(courseStructure, null, 0)}`
       console.log('Contenido generado exitosamente')
     }
 
+    // El contenido siempre se guarda en Markdown, venga del asistente o del body
+    content = normalizeLessonContent(content)
+
     // Contar palabras en el contenido
-    const wordCount = content ? content.trim().split(/\s+/).filter(word => word.length > 0).length : 0
+    const wordCount = countWords(content)
     console.log('Cantidad de palabras:', wordCount)
 
     // Obtener el número de versión actual
@@ -213,19 +219,23 @@ IMPORTANTE:
 - Mantén la coherencia con el resto del contenido del módulo y curso
 - Si agregas contenido nuevo, asegúrate de que tenga la misma profundidad pedagógica, ejemplos concretos y explicaciones del "porqué"
 - Devuelve el texto completo de la lección con las modificaciones incorporadas, no solo la parte editada
-- Mantén el formato markdown y la extensión mínima de 3000 palabras`
+- Mantén la extensión mínima de 3000 palabras
+
+${MARKDOWN_INSTRUCTIONS}`
 
     console.log('Generando contenido editado con OpenAI...')
     const result = await editLessonContent(editPrompt)
     console.log('editPrompt', editPrompt)
 
+    const editedContent = normalizeLessonContent(result.content)
+
     // Contar palabras en el contenido editado
-    const wordCount = result.content ? result.content.trim().split(/\s+/).filter(word => word.length > 0).length : 0
+    const wordCount = countWords(editedContent)
     console.log('Cantidad de palabras en contenido editado:', wordCount)
 
     // Actualizar la versión con el nuevo contenido y agregar al historial de ediciones
     const updatedVersion = await chapterVersionDB.update(versionId, {
-      content: result.content,
+      content: editedContent,
       wordCount,
       $push: {
         edits: {
